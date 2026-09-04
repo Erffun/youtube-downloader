@@ -34,12 +34,26 @@ def get_video_info(url: str):
     ydl_opts = {
         "quiet": True,
         "skip_download": True,
-        "no_warnings": True,
+        "ignoreconfig": True,
+
+        "js_runtimes": {
+            "node": {}
+        },
+
+        "remote_components": {
+            "ejs:github",
+        },
+
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["mweb"]
+            }
+        },
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         return ydl.extract_info(url, download=False)
-
+    
 
 def estimate_size(fmt):
     return fmt.get("filesize") or fmt.get("filesize_approx")
