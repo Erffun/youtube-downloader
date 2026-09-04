@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: youtube-service
+    runtime: docker
+    plan: free
+    envVars:
+      - key: API_SECRET
+        sync: false
