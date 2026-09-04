@@ -1,10 +1,13 @@
 from fastapi import FastAPI, HTTPException, Header
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from fastapi.responses import StreamingResponse, JSONResponse
+from pydantic import BaseModel, Field
 import yt_dlp
 import subprocess
 import re
 import os
+import io
+import contextlib
+from typing import Any
 
 app = FastAPI()
 
@@ -13,6 +16,59 @@ API_SECRET = os.environ.get("API_SECRET")
 if not API_SECRET:
     raise RuntimeError("API_SECRET environment variable is required")
 
+class DebugLogger:
+    def __init__(self):
+        self.logs = []
+
+    def debug(self, msg):
+        self.logs.append(f"[debug] {msg}")
+
+    def info(self, msg):
+        self.logs.append(f"[info] {msg}")
+
+    def warning(self, msg):
+        self.logs.append(f"[warning] {msg}")
+
+    def error(self, msg):
+        self.logs.append(f"[error] {msg}")
+
+    def get_text(self):
+        return "\n".join(self.logs)
+
+class DebugExtractRequest(BaseModel):
+    url: str
+
+    client: str = "mweb"
+
+    js_runtime: str = "node"
+
+    remote_components: list[str] = Field(
+        default_factory=lambda: ["ejs:github"]
+    )
+
+    extractor_args: dict[str, Any] = Field(
+        default_factory=dict
+    )
+
+    extra_opts: dict[str, Any] = Field(
+        default_factory=dict
+    )
+
+class DebugExtractRequest(BaseModel):
+    url: str
+
+    client: str = "mweb"
+
+    js_runtime: str = "node"
+
+    remote_components: list[str] = Field(
+        default_factory=lambda: ["ejs:github"]
+    )
+
+    extractor_args: dict[str, Any] = Field(default_factory=dict)
+
+    extra_opts: dict[str, Any] = Field(default_factory=dict)
+
 class InspectRequest(BaseModel):
     url: str
 
@@ -20,6 +76,35 @@ class InspectRequest(BaseModel):
 class DownloadRequest(BaseModel):
     url: str
     format_id: str
+
+def build_debug_opts(req: DebugExtractRequest, logger):
+    opts = {
+        "verbose": True,
+        "skip_download": True,
+        "ignoreconfig": True,
+
+        "logger": logger,
+
+        "js_runtimes": {
+            req.js_runtime: {}
+        },
+
+        "extractor_args": {
+            "youtube": {
+                "player_client": [req.client],
+                **req.extractor_args,
+            }
+        },
+    }
+
+    if req.remote_components:
+        opts["remote_components"] = set(
+            req.remote_components
+        )
+
+    opts.update(req.extra_opts)
+
+    return opts
 
 def verify_api_key(authorization: str | None):
     expected = f"Bearer {API_SECRET}"
@@ -363,4 +448,76 @@ def download(
         raise HTTPException(
             status_code=400,
             detail=str(e),
+        )
+
+def build_debug_opts(req: DebugExtractRequest):
+    opts = {
+        "verbose": True,
+        "skip_download": True,
+        "ignoreconfig": True,
+        "js_runtimes": {
+            req.js_runtime: {}
+        },
+        "extractor_args": {
+            "youtube": {
+                "player_client": [req.client],
+                **req.extractor_args,
+            }
+        },
+    }
+
+    if req.remote_components:
+        opts["remote_components"] = set(req.remote_components)
+
+    opts.update(req.extra_opts)
+
+    return opts
+
+@app.post("/debug/extract")
+def debug_extract(
+    req: DebugExtractRequest,
+    authorization: str | None = Header(default=None),
+):
+    verify_api_key(authorization)
+
+    logger = DebugLogger()
+
+    try:
+        opts = build_debug_opts(req, logger)
+
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(
+                req.url,
+                download=False,
+            )
+
+        formats = [
+            {
+                "id": f.get("format_id"),
+                "height": f.get("height"),
+                "ext": f.get("ext"),
+                "vcodec": f.get("vcodec"),
+                "acodec": f.get("acodec"),
+            }
+            for f in info.get("formats", [])
+        ]
+
+        return {
+            "success": True,
+            "client": req.client,
+            "title": info.get("title"),
+            "formatCount": len(formats),
+            "formats": formats,
+            "yt_dlp_log": logger.get_text(),
+        }
+
+    except Exception as e:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "client": req.client,
+                "error": str(e),
+                "yt_dlp_log": logger.get_text(),
+            },
         )
